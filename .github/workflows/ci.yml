@@ -1,0 +1,136 @@
+name: CI
+
+# PR と main への push で、静的解析・テスト・Web ビルド・VRT 用スクリーンショット撮影を行う。
+# GitHub Pages への公開は pages.yml (この CI の完了後に workflow_run で起動) が担当する。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FLUTTER_VERSION: 3.50.1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+      # Pages は https://<user>.github.io/<repo>/ で配信されるので base-href をリポジトリ名にする。
+      # CanvasKit も成果物に含めて、gstatic への依存をなくしておく。
+      - name: Build web
+        run: >-
+          flutter build web --release
+          --base-href "/${{ github.event.repository.name }}/"
+          --no-web-resources-cdn
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name != 'pull_request'
+        with:
+          name: web-build
+          path: build/web
+          retention-days: 30
+
+  vrt:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # main の CI 実行からベースラインのアーティファクトを取得するため
+    env:
+      VRT_CJK_FONT: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Install Japanese font
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends fonts-noto-cjk
+          test -f "$VRT_CJK_FONT"
+
+      - run: flutter pub get
+
+      - name: Take screenshots
+        run: flutter test test_vrt
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vrt-screenshots
+          path: test_vrt/screenshots
+          retention-days: 90
+          if-no-files-found: error
+
+      # ---- 以下は PR のみ: main の最新スクリーンショットと比較する ----
+
+      - name: Download baseline from main
+        id: baseline
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --event push --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -z "$run_id" ]; then
+            echo "main の成功した CI がまだ無いため、比較をスキップします。"
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n vrt-screenshots -D "$RUNNER_TEMP/baseline"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: github.event_name == 'pull_request'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tool/vrt/package-lock.json
+
+      - name: Compare with main
+        if: github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HAS_BASELINE: ${{ steps.baseline.outputs.found }}
+        run: |
+          npm ci --prefix tool/vrt
+          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          repo="${GITHUB_REPOSITORY#*/}"
+          url="https://${owner}.github.io/${repo}/vrt/pr-${PR_NUMBER}/"
+          expected=()
+          if [ "$HAS_BASELINE" = "true" ]; then expected=(--expected "$RUNNER_TEMP/baseline"); fi
+          node tool/vrt/compare.mjs "${expected[@]}" \
+            --actual test_vrt/screenshots \
+            --out "$RUNNER_TEMP/vrt-report" \
+            --title "PR #${PR_NUMBER} の VRT" \
+            --summary-md "$GITHUB_STEP_SUMMARY" \
+            --report-url "$url (この CI の完了後、Pages ワークフローで公開されます)"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name == 'pull_request'
+        with:
+          name: vrt-report
+          path: ${{ runner.temp }}/vrt-report
+          retention-days: 30

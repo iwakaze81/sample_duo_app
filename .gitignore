@@ -46,3 +46,7 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+/test_vrt/screenshots/
+
+# VRT
+/tool/vrt/node_modules/

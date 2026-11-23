@@ -1,6 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
 import 'app_theme.dart';
+import 'models/todo.dart';
 import 'pages/todo_home_page.dart';
 import 'preview/web_preview_bridge_stub.dart'
     if (dart.library.js_interop) 'preview/web_preview_bridge.dart';
@@ -13,7 +14,10 @@ void main() {
 }
 
 class TodoApp extends StatelessWidget {
-  const TodoApp({super.key});
+  const TodoApp({super.key, this.initialTodos});
+
+  /// テスト / VRT 用に初期データを差し替えられるようにしている。
+  final List<Todo>? initialTodos;
 
   @override
   Widget build(BuildContext context) {
@@ -22,7 +26,7 @@ class TodoApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       darkTheme: AppTheme.dark(),
-      home: const TodoHomePage(),
+      home: TodoHomePage(initialTodos: initialTodos),
     );
   }
 }

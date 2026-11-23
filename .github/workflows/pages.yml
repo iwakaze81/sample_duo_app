@@ -1,0 +1,132 @@
+name: Pages
+
+# CI の完了後に GitHub Pages へ公開する。
+#
+#   /            … main の Web 版 (端末プレビュー付き)
+#   /vrt/        … VRT レポート一覧
+#   /vrt/main/   … main のスクリーンショット一覧
+#   /vrt/pr-N/   … 開いている PR ごとの差分レポート
+#
+# workflow_run で起動するため、常にデフォルトブランチ (main) のコードで動く。
+# PR から受け取るのは PNG だけで、比較と HTML の生成は main のコードで行う。
+# Pages のデプロイは毎回サイト全体の置き換えなので、過去の PR レポートは
+# 前回のこのワークフローが残したアーティファクト (vrt-site) から引き継ぐ。
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-site:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # 他のワークフロー実行のアーティファクト取得
+      pull-requests: read # 閉じた PR のレポートを掃除するため
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SITE: ${{ github.workspace }}/_site
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tool/vrt/package-lock.json
+
+      - run: npm ci --prefix tool/vrt
+
+      - name: Download main build and screenshots
+        run: |
+          run_id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
+            --event push --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -z "$run_id" ]; then
+            echo "::error::main の成功した CI 実行が見つかりません"
+            exit 1
+          fi
+          gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n web-build -D "$SITE"
+          gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n vrt-screenshots -D "$RUNNER_TEMP/main-shots"
+
+      - name: Restore reports of open PRs
+        run: |
+          mkdir -p "$SITE/vrt"
+          prev=$(gh run list -R "$GITHUB_REPOSITORY" --workflow pages.yml \
+            --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -n "$prev" ]; then
+            gh run download "$prev" -R "$GITHUB_REPOSITORY" -n vrt-site -D "$RUNNER_TEMP/prev" || true
+          fi
+          for dir in "$RUNNER_TEMP"/prev/pr-*; do
+            [ -d "$dir" ] || continue
+            n="${dir##*/pr-}"
+            [[ "$n" =~ ^[0-9]+$ ]] || continue
+            state=$(gh pr view "$n" -R "$GITHUB_REPOSITORY" --json state -q .state || echo UNKNOWN)
+            if [ "$state" = "OPEN" ]; then
+              cp -r "$dir" "$SITE/vrt/"
+            else
+              echo "PR #$n は $state のためレポートを削除"
+            fi
+          done
+
+      - name: main snapshot gallery
+        run: |
+          node tool/vrt/compare.mjs \
+            --actual "$RUNNER_TEMP/main-shots" \
+            --out "$SITE/vrt/main" \
+            --title "main のスナップショット"
+
+      - name: PR report
+        if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          # フォークからの PR では空になる (その場合は公開しない)
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+        run: |
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "PR 番号が取得できないためスキップします (フォークからの PR など)"
+            exit 0
+          fi
+          gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -n vrt-screenshots -D "$RUNNER_TEMP/pr-shots"
+          node tool/vrt/compare.mjs \
+            --expected "$RUNNER_TEMP/main-shots" \
+            --actual "$RUNNER_TEMP/pr-shots" \
+            --out "$SITE/vrt/pr-$PR_NUMBER" \
+            --title "PR #$PR_NUMBER の VRT" \
+            --subtitle-html "<a href=\"https://github.com/$GITHUB_REPOSITORY/pull/$PR_NUMBER\">PR #$PR_NUMBER を開く</a>"
+
+      - name: Report index
+        run: node tool/vrt/site_index.mjs "$SITE/vrt" "$GITHUB_REPOSITORY" "../"
+
+      # 次回の実行で PR レポートを引き継ぐために保存する
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vrt-site
+          path: _site/vrt
+          retention-days: 90
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    needs: build-site
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

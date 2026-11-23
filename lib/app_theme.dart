@@ -4,6 +4,14 @@ import 'package:material_ui/material_ui.dart';
 abstract final class AppTheme {
   static const seed = Color(0xFF5B5BD6);
 
+  /// 日本語のフォールバック。iOS は Hiragino、Android / CI は Noto CJK を使う。
+  /// (VRT では 'Noto Sans CJK JP' にフォントを読み込んで描画している)
+  static const fontFamilyFallback = [
+    'Hiragino Sans',
+    'Noto Sans JP',
+    'Noto Sans CJK JP',
+  ];
+
   static ThemeData light() => _build(Brightness.light);
   static ThemeData dark() => _build(Brightness.dark);
 
@@ -14,6 +22,7 @@ abstract final class AppTheme {
     );
     return ThemeData(
       colorScheme: scheme,
+      fontFamilyFallback: fontFamilyFallback,
       scaffoldBackgroundColor: scheme.surface,
       appBarTheme: AppBarTheme(
         backgroundColor: scheme.surface,
