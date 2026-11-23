@@ -92,7 +92,7 @@ device_preview に iPhone Duo のプリセットはまだ無いため、開い�
 | ワークフロー | タイミング | 内容 |
 | --- | --- | --- |
 | `.github/workflows/ci.yml` | PR / main への push | analyze・test・Web ビルド・VRT 用スクリーンショット撮影。PR では main と比較した結果をジョブサマリーに出す |
-| `.github/workflows/pages.yml` | CI 完了後 (`workflow_run`) | Web 版と VRT レポートをまとめて GitHub Pages に公開 |
+| `.github/workflows/pages.yml` | CI 完了後 (`workflow_run`) | Web 版と VRT レポートをまとめて GitHub Pages に公開し、差分があれば PR にコメント |
 
 公開される URL:
 
@@ -115,9 +115,13 @@ Action はすべてコミット SHA で固定しています (`uses: owner/actio
    PR から受け取るのは PNG だけで、HTML は main 側で生成する (PR のコードを Pages に載せないため)。
    Pages はデプロイのたびにサイト全体が置き換わるので、開いている PR のレポートは前回の
    アーティファクト `vrt-site` から引き継ぐ。
+5. 差分がある PR には、Pages への公開後に **PR コメント**を投稿する (`tool/vrt/pr_comment.mjs`)。
+   変更された画面の一覧と、期待 / 実際 / 差分の画像、HTML レポートへのリンクを載せる。
+   コメントは 1 件だけで、push のたびに更新される。差分が無くなると「差分なし」に書き換わる。
+   (差分が一度も出ていない PR にはコメントしない)
 
-差分があっても CI は失敗にしていません (意図した見た目の変更もあるため)。
-差分を必ずレビューしたい場合は `compare.mjs` の結果で失敗させるよう変更してください。
+差分があっても CI は失敗にしていません (マージはブロックしない方針)。
+コメント内の画像は Pages 上のレポートを参照しているため、PR を閉じてレポートが削除されると表示されなくなります。
 
 ローカルで試す:
 
