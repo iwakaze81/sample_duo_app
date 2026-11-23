@@ -53,7 +53,7 @@ lib/
   utils/date_format.dart       日本語の日付表示
 test/todo_app_test.dart        1 / 2 ペイン、開閉の引き継ぎ、ヒンジ判定のテスト
 test_vrt/vrt_test.dart         VRT 用スクリーンショットの撮影
-tool/vrt/                      VRT の比較・レポート生成 (Node)
+tool/vrt/                      Pages 用 VRT レポート (reg-cli) の生成
 ```
 
 ## Web 版 (GitHub Pages) と端末プレビュー
@@ -91,8 +91,8 @@ device_preview に iPhone Duo のプリセットはまだ無いため、開い�
 
 | ワークフロー | タイミング | 内容 |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | PR / main への push | analyze・test・Web ビルド・VRT 用スクリーンショット撮影。PR では main と比較した結果をジョブサマリーに出す |
-| `.github/workflows/pages.yml` | CI 完了後 (`workflow_run`) | Web 版と VRT レポートをまとめて GitHub Pages に公開し、差分があれば PR にコメント |
+| `.github/workflows/ci.yml` | PR / main への push | analyze・test・Web ビルド、VRT (スクリーンショット撮影 → [reg-actions](https://github.com/reg-viz/reg-actions) で比較・PR コメント) |
+| `.github/workflows/pages.yml` | CI 完了後 (`workflow_run`) | Web 版と VRT レポート (reg-cli) をまとめて GitHub Pages に公開 |
 
 公開される URL:
 
@@ -105,33 +105,35 @@ Action はすべてコミット SHA で固定しています (`uses: owner/actio
 
 ### VRT (Visual Regression Test) の仕組み
 
+reg-suit と同じ reg-viz の [reg-actions](https://github.com/reg-viz/reg-actions) を使っています。
+外部ストレージ (S3 / GCS) や GitHub App は不要で、GitHub Actions のアーティファクトだけで動きます。
+
 1. `test_vrt/vrt_test.dart` が `flutter test` 上でアプリを端末サイズごとに描画し、
    `test_vrt/screenshots/*.png` に書き出す (閉じた状態・開いた状態・半開き・ダーク・タブレットなど)。
    日本語は CI で入れた Noto Sans CJK で描画する。
-2. CI がスクリーンショットをアーティファクト `vrt-screenshots` として保存する。
-3. PR では main の最新の `vrt-screenshots` をベースラインとしてダウンロードし、
-   `tool/vrt/compare.mjs` (pixelmatch) で比較して、結果をジョブサマリーとアーティファクト `vrt-report` に出す。
-4. `pages.yml` が main のコードで同じ比較をやり直し、HTML レポートを Pages に公開する。
-   PR から受け取るのは PNG だけで、HTML は main 側で生成する (PR のコードを Pages に載せないため)。
-   Pages はデプロイのたびにサイト全体が置き換わるので、開いている PR のレポートは前回の
-   アーティファクト `vrt-site` から引き継ぐ。
-5. 差分がある PR には、Pages への公開後に **PR コメント**を投稿する (`tool/vrt/pr_comment.mjs`)。
-   変更された画面の一覧と、期待 / 実際 / 差分の画像、HTML レポートへのリンクを載せる。
-   コメントは 1 件だけで、push のたびに更新される。差分が無くなると「差分なし」に書き換わる。
-   (差分が一度も出ていない PR にはコメントしない)
+2. reg-actions がスクリーンショットをアーティファクト `reg` として保存する。
+   main への push で保存されたものが、以降の PR の比較対象になる。
+3. PR では、分岐元 (merge-base) のコミットの `reg` と比較する (main が先に進んでも無関係な差分が出ない)。
+   差分があれば **画像付きで PR にコメント**する。コメントは 1 件で、push のたびに更新され、
+   差分が無くなると resolved 表示になる。コメント用の画像は `reg_actions` ブランチに push される。
+4. `pages.yml` が `reg` アーティファクトから PNG だけを取り出し、main のコードで
+   reg-cli のレポート (`tool/vrt/build_report.sh`) を作り直して Pages に公開する
+   (PR のコードが作った HTML は載せない)。PR コメントの「レポート」リンクはこのページを指す。
+   Pages はデプロイのたびにサイト全体が置き換わるので、開いている PR のレポートは
+   前回のアーティファクト `vrt-site` から引き継ぐ。
 
 差分があっても CI は失敗にしていません (マージはブロックしない方針)。
-コメント内の画像は Pages 上のレポートを参照しているため、PR を閉じてレポートが削除されると表示されなくなります。
 
-ローカルで試す:
+ローカルで試す (レポートの生成だけ):
 
 ```sh
 VRT_CJK_FONT=/path/to/NotoSansCJK-Regular.ttc flutter test test_vrt
 npm ci --prefix tool/vrt
-node tool/vrt/compare.mjs --expected <main のスクショ> --actual test_vrt/screenshots --out build/vrt
+mkdir -p build/vrt-src && cp -r test_vrt/screenshots build/vrt-src/1_actual
+tool/vrt/build_report.sh build/vrt-src build/vrt-report --gallery   # build/vrt-report/index.html
 ```
 
-フォントや OS が違うと描画も少し変わるので、ベースラインとの比較は CI 上で行う前提です。
+フォントや OS が違うと描画も少し変わるので、比較は CI 上で行う前提です。
 
 ### GitHub Pages の初回設定
 

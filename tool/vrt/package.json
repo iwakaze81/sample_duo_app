@@ -2,10 +2,9 @@
   "name": "sample-duo-app-vrt",
   "private": true,
   "type": "module",
-  "description": "VRT: test_vrt が書き出したスクリーンショットを比較して HTML レポートを作る",
+  "description": "VRT: reg-actions のアーティファクトから Pages 用の reg-cli レポートを作る",
   "engines": { "node": ">=20" },
   "dependencies": {
-    "pixelmatch": "8.0.0",
-    "pngjs": "7.0.0"
+    "reg-cli": "0.18.16"
   }
 }

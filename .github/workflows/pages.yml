@@ -4,12 +4,13 @@ name: Pages
 #
 #   /            … main の Web 版 (端末プレビュー付き)
 #   /vrt/        … VRT レポート一覧
-#   /vrt/main/   … main のスクリーンショット一覧
-#   /vrt/pr-N/   … 開いている PR ごとの差分レポート
+#   /vrt/main/   … main のスクリーンショット一覧 (reg-cli レポート)
+#   /vrt/pr-N/   … 開いている PR ごとの差分レポート (reg-cli レポート)
 #
-# workflow_run で起動するため、常にデフォルトブランチ (main) のコードで動く。
-# PR から受け取るのは PNG だけで、比較と HTML の生成は main のコードで行う。
-# Pages のデプロイは毎回サイト全体の置き換えなので、過去の PR レポートは
+# 比較と PR コメントは CI の reg-actions が行う。ここでは reg-actions が保存した
+# アーティファクト (reg) から PNG だけを取り出し、main のコードで reg-cli レポートを作り直して公開する
+# (workflow_run なので常に main のコードで動き、PR のコードが作った HTML は載せない)。
+# Pages のデプロイは毎回サイト全体の置き換えなので、開いている PR のレポートは
 # 前回のこのワークフローが残したアーティファクト (vrt-site) から引き継ぐ。
 
 on:
@@ -33,9 +34,6 @@ jobs:
       contents: read
       actions: read # 他のワークフロー実行のアーティファクト取得
       pull-requests: read # 閉じた PR のレポートを掃除するため
-    outputs:
-      pr_number: ${{ steps.pr.outputs.pr_number }}
-      has_changes: ${{ steps.pr.outputs.has_changes }}
     env:
       GH_TOKEN: ${{ github.token }}
       SITE: ${{ github.workspace }}/_site
@@ -59,7 +57,9 @@ jobs:
             exit 1
           fi
           gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n web-build -D "$SITE"
-          gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n vrt-screenshots -D "$RUNNER_TEMP/main-shots"
+          # reg-actions 導入前の main にはアーティファクト reg が無いので、無ければ一覧を作らない
+          gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n reg -D "$RUNNER_TEMP/main-reg" ||
+            echo "main の reg アーティファクトがありません"
 
       - name: Restore reports of open PRs
         run: |
@@ -70,12 +70,12 @@ jobs:
             gh run download "$prev" -R "$GITHUB_REPOSITORY" -n vrt-site -D "$RUNNER_TEMP/prev" || true
           fi
           for dir in "$RUNNER_TEMP"/prev/pr-*; do
-            [ -d "$dir" ] || continue
+            [ -f "$dir/reg.json" ] || continue
             n="${dir##*/pr-}"
             [[ "$n" =~ ^[0-9]+$ ]] || continue
             state=$(gh pr view "$n" -R "$GITHUB_REPOSITORY" --json state -q .state || echo UNKNOWN)
             if [ "$state" = "OPEN" ]; then
-              cp -r "$dir" "$SITE/vrt/"
+              cp -rp "$dir" "$SITE/vrt/"
             else
               echo "PR #$n は $state のためレポートを削除"
             fi
@@ -83,17 +83,14 @@ jobs:
 
       - name: main snapshot gallery
         run: |
-          node tool/vrt/compare.mjs \
-            --actual "$RUNNER_TEMP/main-shots" \
-            --out "$SITE/vrt/main" \
-            --title "main のスナップショット"
+          if [ -d "$RUNNER_TEMP/main-reg/1_actual" ]; then
+            tool/vrt/build_report.sh "$RUNNER_TEMP/main-reg" "$SITE/vrt/main" --gallery
+          fi
 
       - name: PR report
-        id: pr
         if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'
         env:
           RUN_ID: ${{ github.event.workflow_run.id }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           # フォークからの PR では空になる (その場合は公開しない)
           PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
@@ -101,32 +98,8 @@ jobs:
             echo "PR 番号が取得できないためスキップします (フォークからの PR など)"
             exit 0
           fi
-          gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -n vrt-screenshots -D "$RUNNER_TEMP/pr-shots"
-          node tool/vrt/compare.mjs \
-            --expected "$RUNNER_TEMP/main-shots" \
-            --actual "$RUNNER_TEMP/pr-shots" \
-            --out "$SITE/vrt/pr-$PR_NUMBER" \
-            --title "PR #$PR_NUMBER の VRT" \
-            --subtitle-html "<a href=\"https://github.com/$GITHUB_REPOSITORY/pull/$PR_NUMBER\">PR #$PR_NUMBER を開く</a>"
-
-          # PR コメント本文 (画像とレポートは Pages に公開したものを参照する)
-          owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          repo="${GITHUB_REPOSITORY#*/}"
-          mkdir -p "$RUNNER_TEMP/vrt-comment"
-          node tool/vrt/pr_comment.mjs \
-            --results "$SITE/vrt/pr-$PR_NUMBER/results.json" \
-            --report-url "https://${owner}.github.io/${repo}/vrt/pr-$PR_NUMBER/" \
-            --sha "$HEAD_SHA" \
-            --out "$RUNNER_TEMP/vrt-comment/comment.md" \
-            --github-output "$GITHUB_OUTPUT"
-          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.pr.outputs.pr_number != ''
-        with:
-          name: vrt-comment
-          path: ${{ runner.temp }}/vrt-comment
-          retention-days: 7
+          gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" -n reg -D "$RUNNER_TEMP/pr-reg"
+          tool/vrt/build_report.sh "$RUNNER_TEMP/pr-reg" "$SITE/vrt/pr-$PR_NUMBER"
 
       - name: Report index
         run: node tool/vrt/site_index.mjs "$SITE/vrt" "$GITHUB_REPOSITORY" "../"
@@ -154,39 +127,3 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
-
-  # Pages に公開された後で PR にコメントする (コメント内の画像とリンクが Pages を指すため)。
-  # 差分があるときだけ新規作成し、以降は同じコメントを更新する。
-  # 差分が無くなったときは既存のコメントを「差分なし」に更新する (無ければ何もしない)。
-  comment:
-    needs: [build-site, deploy]
-    if: needs.build-site.outputs.pr_number != ''
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-      issues: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      PR_NUMBER: ${{ needs.build-site.outputs.pr_number }}
-      HAS_CHANGES: ${{ needs.build-site.outputs.has_changes }}
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: vrt-comment
-          path: ${{ runner.temp }}/vrt-comment
-
-      - name: Post or update PR comment
-        run: |
-          body="$RUNNER_TEMP/vrt-comment/comment.md"
-          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
-            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- vrt-report -->"))) | .id' \
-            | head -n 1)
-          if [ -n "$existing" ]; then
-            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F "body=@$body" > /dev/null
-            echo "コメントを更新しました: $existing"
-          elif [ "$HAS_CHANGES" = "true" ]; then
-            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -F "body=@$body" > /dev/null
-            echo "コメントを投稿しました"
-          else
-            echo "差分なし・既存コメントなしのため投稿しません"
-          fi

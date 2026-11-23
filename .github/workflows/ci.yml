@@ -50,15 +50,23 @@ jobs:
           path: build/web
           retention-days: 30
 
+  # VRT は reg-actions (https://github.com/reg-viz/reg-actions) で行う。
+  # - main への push: スクリーンショットをアーティファクト (reg) に保存し、次回以降の比較対象にする
+  # - PR: 分岐元 (merge-base) のコミットの reg アーティファクトと比較し、
+  #       差分があれば画像付きで PR にコメントする (1 件を更新し続ける)。マージはブロックしない。
+  #       コメント用の画像は reg_actions ブランチに push される。
   vrt:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      actions: read # main の CI 実行からベースラインのアーティファクトを取得するため
+      contents: write # コメント用の画像を reg_actions ブランチに push するため
+      pull-requests: write # PR コメント
+      actions: read # 比較対象の reg アーティファクトを探すため
     env:
       VRT_CJK_FONT: /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # reg-actions が merge-base を計算するため
 
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
@@ -77,60 +85,22 @@ jobs:
       - name: Take screenshots
         run: flutter test test_vrt
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: vrt-screenshots
-          path: test_vrt/screenshots
-          retention-days: 90
-          if-no-files-found: error
-
-      # ---- 以下は PR のみ: main の最新スクリーンショットと比較する ----
-
-      - name: Download baseline from main
-        id: baseline
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          run_id=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch main \
-            --event push --status success --limit 1 --json databaseId -q '.[0].databaseId')
-          if [ -z "$run_id" ]; then
-            echo "main の成功した CI がまだ無いため、比較をスキップします。"
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          gh run download "$run_id" -R "$GITHUB_REPOSITORY" -n vrt-screenshots -D "$RUNNER_TEMP/baseline"
-          echo "found=true" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        if: github.event_name == 'pull_request'
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: tool/vrt/package-lock.json
-
-      - name: Compare with main
+      - name: Report URL on Pages
+        id: report
         if: github.event_name == 'pull_request'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HAS_BASELINE: ${{ steps.baseline.outputs.found }}
         run: |
-          npm ci --prefix tool/vrt
           owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
-          repo="${GITHUB_REPOSITORY#*/}"
-          url="https://${owner}.github.io/${repo}/vrt/pr-${PR_NUMBER}/"
-          expected=()
-          if [ "$HAS_BASELINE" = "true" ]; then expected=(--expected "$RUNNER_TEMP/baseline"); fi
-          node tool/vrt/compare.mjs "${expected[@]}" \
-            --actual test_vrt/screenshots \
-            --out "$RUNNER_TEMP/vrt-report" \
-            --title "PR #${PR_NUMBER} の VRT" \
-            --summary-md "$GITHUB_STEP_SUMMARY" \
-            --report-url "$url (この CI の完了後、Pages ワークフローで公開されます)"
+          echo "url=https://${owner}.github.io/${GITHUB_REPOSITORY#*/}/vrt/pr-${PR_NUMBER}/" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: github.event_name == 'pull_request'
+      - uses: reg-viz/reg-actions@f0cccbcab7e7ecf9b0434b719f1e842c97bcd2a7 # v3
         with:
-          name: vrt-report
-          path: ${{ runner.temp }}/vrt-report
-          retention-days: 30
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          image-directory-path: test_vrt/screenshots
+          matching-threshold: 0.1
+          comment-mode: changes # 差分があるときだけコメント
+          outdated-comment-action: update # コメントは 1 件を更新し続ける (差分が消えたら resolved 表示)
+          comment-report-format: raw # 変更画面の画像を展開して表示
+          # Pages の reg-cli レポート (この CI の完了後に pages.yml が公開する)
+          custom-report-page: ${{ steps.report.outputs.url }}
