@@ -40,7 +40,7 @@ class ProgressCard extends StatelessWidget {
                 ? 'タスクはありません'
                 : remaining == 0
                     ? 'すべて完了しました 🎉'
-                    : '残り $remaining 件',
+                    : 'あと $remaining 件',
             style: theme.textTheme.headlineSmall!.copyWith(
               color: scheme.onPrimary,
               fontWeight: FontWeight.bold,
