@@ -54,12 +54,49 @@ lib/
 test/todo_app_test.dart        1 / 2 ペイン、開閉の引き継ぎ、ヒンジ判定のテスト
 ```
 
+## Web 版 (GitHub Pages) と端末プレビュー
+
+Web 版は `.github/workflows/deploy-web.yml` で GitHub Pages にデプロイします
+(`https://<user>.github.io/sample_duo_app/`)。
+
+Web 版だけ [device_preview](https://pub.dev/packages/device_preview) を有効にしていて、
+画面上部のツールバーから端末を切り替えてレスポンシブ表示を確認できます。
+
+| 閉じた状態 (iPhone 17 相当) | 半開き (折り目で 2 ペインに分割) |
+| --- | --- |
+| <img src="docs/screenshots/web_preview_closed.png" width="420"> | <img src="docs/screenshots/web_preview_open.png" width="420"> |
+
+- **開く / 閉じる**: iPhone Duo の開閉を切り替えます。アプリの状態は保たれたままなので、
+  選択中の ToDo が引き継がれる様子をそのまま確認できます。
+- **端末**: iPhone Duo (閉 / 開 / 半開き)、iPhone SE、iPhone 17 Pro Max、iPad mini、
+  Galaxy Z Fold8、Pixel 10 Pro Fold、プレビュー解除 (ブラウザ幅)
+- **横向き / ダーク**: 回転とダークモード
+
+device_preview に iPhone Duo のプリセットはまだ無いため、開いた状態は 800×980 の
+**想定サイズ**で定義しています (`lib/preview/preview_devices.dart`)。実機の値が分かったら差し替えてください。
+
+仕組み:
+
+- `lib/main.dart` で条件付き import を使い、Web のときだけ `lib/preview/web_preview_bridge.dart` を読み込みます。
+  iOS / Android ではスタブが使われ、device_preview はビルドに含まれません。
+- device_preview 3.x はアプリ内のツールバーが無く、操作 UI は DevTools 側にあります。Pages では DevTools を
+  使えないため、`web/index.html` に HTML のツールバーを置き、JS 経由で `DevicePreview.controller` を操作しています。
+- device_preview 3.0.0 は Flutter 3.50 の Web ビルドでコンパイルエラーになるため、
+  1 メソッド追加したコピーを `third_party/device_preview` に置いて `dependency_overrides` で使っています
+  (詳細は `third_party/device_preview/PATCHED.md`)。
+
+### GitHub Pages の初回設定
+
+リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** にしてください。
+以降は `main` への push でデプロイされます (PR ではビルドとテストのみ)。
+
 ## 実行
 
 ```sh
 flutter pub get
 flutter run          # iPhone Duo シミュレータで開閉を切り替えて確認
 flutter test
+flutter run -d chrome   # Web 版 (端末プレビュー付き)
 ```
 
 テストでは画面サイズを変えて「閉じた状態 (390×844)」と「開いた状態 (900×760)」を再現しています。

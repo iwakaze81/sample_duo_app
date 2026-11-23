@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <base href="$FLUTTER_BASE_HREF">
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="iPhone Duo 対応 Flutter ToDo アプリのレスポンシブプレビュー">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Duo ToDo">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="icon" type="image/png" href="favicon.png"/>
+  <title>Duo ToDo Preview</title>
+  <link rel="manifest" href="manifest.json">
+  <style>
+    :root {
+      --bar-bg: #16161d;
+      --bar-fg: #e8e8f0;
+      --bar-muted: #9a9ab0;
+      --accent: #8c8cf5;
+      --control-bg: #24242f;
+      --control-border: #3a3a4a;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: #1d1d25; }
+    body {
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+      color: var(--bar-fg);
+    }
+    #toolbar {
+      flex: none;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 12px;
+      padding: 10px 16px;
+      background: var(--bar-bg);
+      border-bottom: 1px solid var(--control-border);
+      font-size: 13px;
+    }
+    #toolbar .title { font-weight: 700; margin-right: 4px; }
+    #toolbar .title small { color: var(--bar-muted); font-weight: 400; margin-left: 6px; }
+    #toolbar .spacer { flex: 1; }
+    #toolbar select, #toolbar button {
+      font: inherit;
+      color: var(--bar-fg);
+      background: var(--control-bg);
+      border: 1px solid var(--control-border);
+      border-radius: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    #toolbar button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+    #toolbar button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+    #toolbar button:disabled, #toolbar select:disabled { opacity: .4; cursor: default; }
+    #toolbar label { display: inline-flex; align-items: center; gap: 6px; color: var(--bar-muted); }
+    #app { flex: 1; position: relative; min-height: 0; }
+    #loading {
+      position: absolute; inset: 0; display: grid; place-items: center;
+      color: var(--bar-muted); font-size: 14px; pointer-events: none;
+    }
+    @media (max-width: 560px) {
+      #toolbar .title small { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="toolbar" role="toolbar" aria-label="端末プレビュー">
+    <span class="title">Duo ToDo<small>Device Preview</small></span>
+    <label>端末
+      <select id="device" disabled></select>
+    </label>
+    <button id="fold" class="primary" disabled title="iPhone Duo を開く / 閉じる">開く</button>
+    <button id="rotate" aria-pressed="false" disabled>横向き</button>
+    <button id="dark" aria-pressed="false" disabled>ダーク</button>
+    <span class="spacer"></span>
+  </div>
+  <div id="app"><div id="loading">読み込み中…</div></div>
+
+  <script>
+    // Flutter 側 (lib/preview/web_preview_bridge.dart) から呼ばれる。
+    window.duoPreviewReady = function (api) {
+      document.getElementById('loading')?.remove();
+      const devices = JSON.parse(api.devices);
+      const select = document.getElementById('device');
+      const fold = document.getElementById('fold');
+      const rotate = document.getElementById('rotate');
+      const dark = document.getElementById('dark');
+
+      const groups = new Map();
+      for (const d of devices) {
+        if (!groups.has(d.group)) {
+          const og = document.createElement('optgroup');
+          og.label = d.group;
+          groups.set(d.group, og);
+          select.appendChild(og);
+        }
+        const opt = document.createElement('option');
+        opt.value = d.key;
+        opt.textContent = d.label;
+        groups.get(d.group).appendChild(opt);
+      }
+      select.value = api.initialDevice;
+
+      const sync = () => {
+        const key = select.value;
+        const isDuo = key.startsWith('duo-');
+        fold.disabled = !isDuo;
+        fold.textContent = !isDuo ? '開閉' : key === 'duo-closed' ? '開く' : '閉じる';
+        rotate.disabled = key === 'off';
+        dark.disabled = key === 'off';
+      };
+      const setDevice = (key) => {
+        select.value = key;
+        api.setDevice(key);
+        sync();
+      };
+
+      select.addEventListener('change', () => setDevice(select.value));
+      fold.addEventListener('click', () =>
+        setDevice(select.value === 'duo-closed' ? 'duo-open' : 'duo-closed'));
+      rotate.addEventListener('click', () => {
+        const on = rotate.getAttribute('aria-pressed') !== 'true';
+        rotate.setAttribute('aria-pressed', String(on));
+        api.setOrientation(on ? 'landscape' : 'portrait');
+      });
+      dark.addEventListener('click', () => {
+        const on = dark.getAttribute('aria-pressed') !== 'true';
+        dark.setAttribute('aria-pressed', String(on));
+        api.setDark(on);
+      });
+
+      select.disabled = false;
+      sync();
+    };
+  </script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

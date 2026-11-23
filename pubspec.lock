@@ -57,6 +57,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.7"
+  device_preview:
+    dependency: "direct main"
+    description:
+      path: "third_party/device_preview"
+      relative: true
+    source: path
+    version: "3.0.0"
   fake_async:
     dependency: transitive
     description:
