@@ -52,11 +52,13 @@ lib/
   widgets/                     一覧・詳細・追加シートなどの UI
   utils/date_format.dart       日本語の日付表示
 test/todo_app_test.dart        1 / 2 ペイン、開閉の引き継ぎ、ヒンジ判定のテスト
+test_vrt/vrt_test.dart         VRT 用スクリーンショットの撮影
+tool/vrt/                      VRT の比較・レポート生成 (Node)
 ```
 
 ## Web 版 (GitHub Pages) と端末プレビュー
 
-Web 版は `.github/workflows/deploy-web.yml` で GitHub Pages にデプロイします
+Web 版は GitHub Pages に公開しています (後述の「CI / GitHub Pages / VRT」を参照)
 (`https://<user>.github.io/sample_duo_app/`)。
 
 Web 版だけ [device_preview](https://pub.dev/packages/device_preview) を有効にしていて、
@@ -85,10 +87,51 @@ device_preview に iPhone Duo のプリセットはまだ無いため、開い�
   1 メソッド追加したコピーを `third_party/device_preview` に置いて `dependency_overrides` で使っています
   (詳細は `third_party/device_preview/PATCHED.md`)。
 
+## CI / GitHub Pages / VRT
+
+| ワークフロー | タイミング | 内容 |
+| --- | --- | --- |
+| `.github/workflows/ci.yml` | PR / main への push | analyze・test・Web ビルド・VRT 用スクリーンショット撮影。PR では main と比較した結果をジョブサマリーに出す |
+| `.github/workflows/pages.yml` | CI 完了後 (`workflow_run`) | Web 版と VRT レポートをまとめて GitHub Pages に公開 |
+
+公開される URL:
+
+- `https://<user>.github.io/sample_duo_app/` … Web 版 (端末プレビュー付き)
+- `https://<user>.github.io/sample_duo_app/vrt/` … VRT レポート一覧
+  - `vrt/main/` … main のスクリーンショット一覧
+  - `vrt/pr-<番号>/` … PR ごとの差分レポート (PR が閉じられると次の公開時に削除)
+
+Action はすべてコミット SHA で固定しています (`uses: owner/action@<sha> # vX.Y.Z`)。
+
+### VRT (Visual Regression Test) の仕組み
+
+1. `test_vrt/vrt_test.dart` が `flutter test` 上でアプリを端末サイズごとに描画し、
+   `test_vrt/screenshots/*.png` に書き出す (閉じた状態・開いた状態・半開き・ダーク・タブレットなど)。
+   日本語は CI で入れた Noto Sans CJK で描画する。
+2. CI がスクリーンショットをアーティファクト `vrt-screenshots` として保存する。
+3. PR では main の最新の `vrt-screenshots` をベースラインとしてダウンロードし、
+   `tool/vrt/compare.mjs` (pixelmatch) で比較して、結果をジョブサマリーとアーティファクト `vrt-report` に出す。
+4. `pages.yml` が main のコードで同じ比較をやり直し、HTML レポートを Pages に公開する。
+   PR から受け取るのは PNG だけで、HTML は main 側で生成する (PR のコードを Pages に載せないため)。
+   Pages はデプロイのたびにサイト全体が置き換わるので、開いている PR のレポートは前回の
+   アーティファクト `vrt-site` から引き継ぐ。
+
+差分があっても CI は失敗にしていません (意図した見た目の変更もあるため)。
+差分を必ずレビューしたい場合は `compare.mjs` の結果で失敗させるよう変更してください。
+
+ローカルで試す:
+
+```sh
+VRT_CJK_FONT=/path/to/NotoSansCJK-Regular.ttc flutter test test_vrt
+npm ci --prefix tool/vrt
+node tool/vrt/compare.mjs --expected <main のスクショ> --actual test_vrt/screenshots --out build/vrt
+```
+
+フォントや OS が違うと描画も少し変わるので、ベースラインとの比較は CI 上で行う前提です。
+
 ### GitHub Pages の初回設定
 
 リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** にしてください。
-以降は `main` への push でデプロイされます (PR ではビルドとテストのみ)。
 
 ## 実行
 
